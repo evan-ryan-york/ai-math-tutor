@@ -1,9 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '')
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Enable CORS
@@ -47,28 +45,33 @@ Available primitives:
 
 Return ONLY valid JSON: {"commands": [...]}`
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: { url: imageDataUrl }
-            },
-            {
-              type: 'text',
-              text: prompt
-            }
-          ]
-        }
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 1000
+    // Convert base64 data URL to format Gemini expects
+    const base64Data = imageDataUrl.split(',')[1]
+    const mimeType = imageDataUrl.split(';')[0].split(':')[1]
+
+    // Use Gemini 2.5 Flash - best for multimodal reasoning and image understanding
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.7,
+        maxOutputTokens: 1000
+      }
     })
 
-    const drawingCommands = JSON.parse(response.choices[0].message.content || '{"commands":[]}')
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType
+        }
+      },
+      prompt
+    ])
+
+    const response = await result.response
+    const text = response.text()
+    const drawingCommands = JSON.parse(text || '{"commands":[]}')
 
     return res.status(200).json(drawingCommands)
   } catch (error) {
