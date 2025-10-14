@@ -100,8 +100,9 @@ GOOGLE_API_KEY=your-actual-google-ai-key-here
 
 ### 5. Start Development Server
 
+**For full functionality (recommended):**
 ```bash
-pnpm run dev
+pnpm run dev:vercel
 ```
 
 This runs `vercel dev` which:
@@ -110,11 +111,11 @@ This runs `vercel dev` which:
 - Loads environment variables from `.env.local`
 - Serves the app at `http://localhost:3000` (default)
 
-**Alternative (frontend-only development):**
+**For frontend-only development (no API endpoints):**
 ```bash
-npx vite
+pnpm run dev
 ```
-Note: This starts only the frontend without API endpoints.
+Note: This starts only the frontend. Voice session will fail with 404 errors without API endpoints.
 
 ### 6. Test the Application
 
@@ -236,7 +237,8 @@ These settings were optimized to prevent the AI from interrupting itself while m
 
 | Command | Description |
 |---------|-------------|
-| `pnpm run dev` | Start Vercel dev server (frontend + API functions) |
+| `pnpm run dev:vercel` | **Recommended:** Start Vercel dev server (frontend + API functions) |
+| `pnpm run dev` | Start Vite only (frontend-only, no API endpoints) |
 | `pnpm run build` | Build production bundle (TypeScript check + Vite build) |
 | `pnpm run preview` | Preview production build locally |
 | `pnpm run lint` | Run ESLint on TypeScript/React files |
@@ -325,10 +327,10 @@ Or via Vercel Dashboard:
 
 **Symptom**: Voice session fails with "Failed to create session"
 
-**Solution**: You must use `vercel dev`, not plain Vite:
+**Solution**: You must use the Vercel dev server, not plain Vite:
 ```bash
-pnpm run dev  # ✓ Correct - runs vercel dev
-npx vite      # ✗ Wrong - API endpoints won't work
+pnpm run dev:vercel  # ✓ Correct - runs vercel dev with API endpoints
+pnpm run dev         # ✗ Wrong - only frontend, API endpoints won't work
 ```
 
 ### AI Keeps Interrupting Itself
