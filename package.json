@@ -1,8 +1,31 @@
 {
   "name": "ai-math-tutor",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
+  "description": "Interactive AI-powered math tutoring application with real-time voice conversations and intelligent whiteboard",
   "type": "module",
+  "author": "Simili",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/ai-math-tutor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/ai-math-tutor/issues"
+  },
+  "keywords": [
+    "ai",
+    "education",
+    "math-tutor",
+    "webrtc",
+    "openai",
+    "realtime-api",
+    "interactive-learning"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
   "scripts": {
     "dev": "vercel dev",
     "build": "tsc && vite build",
