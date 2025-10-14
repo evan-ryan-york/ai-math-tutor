@@ -38,11 +38,21 @@ OPENAI_API_KEY=sk-proj-your-actual-key-here
 
 ### 3. Run Development Server
 
+**Important:** Use Vercel CLI for local development to enable API endpoints:
+
+```bash
+vercel dev
+```
+
+This will start the Vercel dev server at http://localhost:3000 with both:
+- Frontend (Vite)
+- API endpoints (/api/session and /api/render)
+
+**Alternative (frontend only, no API - for UI development):**
 ```bash
 npm run dev
 ```
-
-Open http://localhost:5173 in your browser.
+Note: Plain vite server on port 5192. API endpoints will return 404.
 
 ## Project Structure
 
@@ -118,10 +128,16 @@ vercel --prod
 
 ## Troubleshooting
 
+### API endpoints return 404
+**Solution:** Make sure you're using `vercel dev`, not `npm run dev`.
+- `vercel dev` - Serves API endpoints at `/api/*` + frontend
+- `npm run dev` - Frontend only (plain Vite), no serverless functions
+
 ### "Failed to create session" error
 - Check that OPENAI_API_KEY is set correctly in .env.local
 - Verify API key has Realtime API access
 - Check browser console for detailed error messages
+- Make sure you're using Vercel dev server (`vercel dev`)
 
 ### No audio playback
 - Ensure microphone permissions are granted

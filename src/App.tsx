@@ -1,64 +1,336 @@
-import React, { useState } from 'react'
+import { useState, useRef } from 'react'
 import StageDisplay from './components/StageDisplay'
 import Whiteboard from './components/Whiteboard'
 import VoiceInterface from './components/VoiceInterface'
-import type { Stage } from './types'
+import { getLesson } from './data/lessons'
+import type { Stage, SessionState } from './types'
 import './App.css'
 
 function App() {
+  const [sessionState, setSessionState] = useState<SessionState | null>(null)
   const [currentStage, setCurrentStage] = useState<Stage | null>(null)
-  const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null)
-  const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null)
-  const [sessionStarted, setSessionStarted] = useState(false)
+  const [isVoiceActive, setIsVoiceActive] = useState(false)
+  const [conversationLog, setConversationLog] = useState<string[]>([])
+  const whiteboardImageRef = useRef<string>('')
 
+  // Initialize lesson
   const handleStartLesson = () => {
-    // Placeholder - will be implemented in next phase
-    const mockStage: Stage = {
-      stage_id: 1,
-      problem: 'I have 2 pizzas with 8 slices each. If 3 friends want to share them equally, how should we divide them?',
-      learning_objective: 'Understand division with remainders',
-      mastery_criteria: {
-        description: 'Student recognizes remainder',
-        indicators: ['Mentions leftover slice', 'Proposes solution']
-      },
-      context_for_agent: 'Guide student to discover 16÷3 = 5 remainder 1'
+    const lesson = getLesson('division-with-remainders-1')
+    if (!lesson) {
+      console.error('Lesson not found')
+      return
     }
-    setCurrentStage(mockStage)
+
+    const newSession: SessionState = {
+      session_id: generateSessionId(),
+      lesson_id: lesson.lesson_id,
+      current_stage: 0,
+      stage_start_time: new Date(),
+      peer_connection: null,
+      data_channel: null
+    }
+
+    setSessionState(newSession)
+    setCurrentStage(lesson.stages[0])
+    console.log('Lesson started:', newSession)
   }
 
-  const handleSessionCreate = (pc: RTCPeerConnection, dc: RTCDataChannel) => {
-    setPeerConnection(pc)
-    setDataChannel(dc)
-    setSessionStarted(true)
+  // Utility functions
+  const generateSessionId = () => {
+    return 'session_' + Math.random().toString(36).substring(2, 15)
+  }
 
-    // Set up data channel listeners
+  const addToLog = (message: string) => {
+    setConversationLog(prev => [...prev, message])
+  }
+
+  // Handle WebRTC session creation
+  const handleSessionCreate = (pc: RTCPeerConnection, dc: RTCDataChannel) => {
+    if (!sessionState) return
+
+    // Update session state with WebRTC connections
+    setSessionState({
+      ...sessionState,
+      peer_connection: pc,
+      data_channel: dc
+    })
+
+    // Listen for server events from OpenAI
     dc.addEventListener('message', (event) => {
       const serverEvent = JSON.parse(event.data)
-      console.log('Server event:', serverEvent)
-      // Handle server events here
+      handleServerEvent(serverEvent)
     })
 
     dc.addEventListener('open', () => {
-      console.log('Data channel opened')
+      console.log('Data channel opened - session already configured via /calls endpoint')
+
+      // The session is already configured via the FormData sent to /calls
+      // Just trigger the AI to start speaking
+      const responseCreateEvent = {
+        type: 'response.create'
+      }
+
+      console.log('=== TRIGGERING INITIAL AI RESPONSE ===')
+      console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
+      console.log('======================================')
+
+      dc.send(JSON.stringify(responseCreateEvent))
     })
+
+    setIsVoiceActive(true)
   }
 
-  const handleWhiteboardUpdate = async (imageDataUrl: string) => {
-    console.log('Whiteboard updated')
-    // Placeholder for sending image to realtime session
-    // Will be implemented in next phase
+  // Send session update to OpenAI Realtime API
+  const sendSessionUpdate = (dc: RTCDataChannel, stage: Stage) => {
+    const updateEvent = {
+      type: 'session.update',
+      session: {
+        instructions: `You are a helpful math tutor. You must ALWAYS respond in English only. Never use any other language. Start by presenting the problem to the student. ${stage.context_for_agent}`,
+        input_audio_transcription: {
+          model: 'whisper-1'
+        },
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.6,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 1000
+        },
+        tools: [
+          {
+            type: 'function',
+            name: 'stage_complete',
+            description: 'Call this when the student has demonstrated mastery of the current learning objective',
+            parameters: {
+              type: 'object',
+              properties: {
+                reasoning: {
+                  type: 'string',
+                  description: 'Brief explanation of why student is ready to advance'
+                }
+              },
+              required: ['reasoning']
+            }
+          },
+          {
+            type: 'function',
+            name: 'update_whiteboard',
+            description: 'Add or modify content on the interactive whiteboard',
+            parameters: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['draw', 'highlight', 'label', 'clear'],
+                  description: 'Type of whiteboard action'
+                },
+                description: {
+                  type: 'string',
+                  description: 'Natural language description of what to draw/modify'
+                }
+              },
+              required: ['action', 'description']
+            }
+          }
+        ]
+      }
+    }
+
+    console.log('=== SENDING SESSION UPDATE ===')
+    console.log('Event type:', updateEvent.type)
+    console.log('Session keys:', Object.keys(updateEvent.session))
+    console.log('Full payload:', JSON.stringify(updateEvent, null, 2))
+    console.log('==============================')
+
+    dc.send(JSON.stringify(updateEvent))
+
+    // Now trigger a response from the AI
+    const responseCreateEvent = {
+      type: 'response.create'
+    }
+
+    console.log('=== TRIGGERING AI RESPONSE ===')
+    console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
+    console.log('==============================')
+
+    dc.send(JSON.stringify(responseCreateEvent))
+  }
+
+  // Handle server events from OpenAI
+  const handleServerEvent = async (event: any) => {
+    // Log errors and important events with more detail
+    if (event.type === 'error') {
+      console.error('=== OPENAI ERROR EVENT ===')
+      console.error('Error type:', event.error?.type)
+      console.error('Error code:', event.error?.code)
+      console.error('Error message:', event.error?.message)
+      console.error('Error param:', event.error?.param)
+      console.error('Full error object:', JSON.stringify(event, null, 2))
+      console.error('==========================')
+    } else if (event.type.includes('session')) {
+      console.log('=== SESSION EVENT ===')
+      console.log('Event type:', event.type)
+      console.log('Full event:', JSON.stringify(event, null, 2))
+      console.log('====================')
+    } else {
+      console.log('Server event:', event.type)
+    }
+
+    switch (event.type) {
+      case 'response.function_call_arguments.done':
+        handleFunctionCall(event)
+        break
+
+      case 'response.audio_transcript.done':
+        if (event.transcript) {
+          addToLog(`AI: ${event.transcript}`)
+        }
+        break
+
+      case 'conversation.item.input_audio_transcription.completed':
+        if (event.transcript) {
+          addToLog(`Student: ${event.transcript}`)
+        }
+        break
+
+      case 'error':
+        console.error('OpenAI error:', event.error)
+        break
+    }
+  }
+
+  // Handle function calls from OpenAI
+  const handleFunctionCall = async (event: any) => {
+    const functionName = event.name
+    const args = JSON.parse(event.arguments)
+
+    console.log(`Function called: ${functionName}`, args)
+
+    if (functionName === 'stage_complete') {
+      await handleStageComplete(args.reasoning)
+    } else if (functionName === 'update_whiteboard') {
+      await handleWhiteboardUpdate(args)
+    }
+  }
+
+  // Handle stage completion
+  const handleStageComplete = async (reasoning: string) => {
+    if (!sessionState) return
+
+    console.log('Stage complete:', reasoning)
+    addToLog(`[Stage ${currentStage?.stage_id} completed: ${reasoning}]`)
+
+    const lesson = getLesson(sessionState.lesson_id)
+    if (!lesson) return
+
+    const nextStageIndex = sessionState.current_stage + 1
+
+    if (nextStageIndex < lesson.stages.length) {
+      // Advance to next stage
+      const nextStage = lesson.stages[nextStageIndex]
+
+      setCurrentStage(nextStage)
+      setSessionState({
+        ...sessionState,
+        current_stage: nextStageIndex,
+        stage_start_time: new Date()
+      })
+
+      // Show transition UI
+      alert(`Great work! Moving to Stage ${nextStage.stage_id}`)
+
+      // Update session instructions for new stage
+      if (sessionState.data_channel) {
+        sendSessionUpdate(sessionState.data_channel, nextStage)
+      }
+    } else {
+      // Lesson complete
+      alert('Congratulations! You completed the entire lesson!')
+      console.log('Lesson completed')
+    }
+  }
+
+  // Handle whiteboard drawing request from AI
+  const handleWhiteboardUpdate = async (args: { action: string; description: string }) => {
+    console.log('Whiteboard update requested:', args)
+
+    if (!whiteboardImageRef.current) {
+      console.warn('No whiteboard image available yet')
+      return
+    }
+
+    try {
+      // Call backend to generate drawing commands
+      const response = await fetch('/api/render', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          imageDataUrl: whiteboardImageRef.current,
+          action: args.action,
+          description: args.description
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate drawing commands')
+      }
+
+      const result = await response.json()
+
+      // Trigger drawing on whiteboard component
+      window.dispatchEvent(new CustomEvent('whiteboard-draw', {
+        detail: result.commands
+      }))
+
+    } catch (error) {
+      console.error('Whiteboard update error:', error)
+    }
+  }
+
+  // Handle whiteboard image updates
+  const handleWhiteboardImageUpdate = (imageDataUrl: string) => {
+    whiteboardImageRef.current = imageDataUrl
+
+    // Send image to OpenAI so it can see the whiteboard
+    if (sessionState?.data_channel && sessionState.data_channel.readyState === 'open') {
+      const imageEvent = {
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_image',
+              image_url: imageDataUrl
+            }
+          ]
+        }
+      }
+
+      sessionState.data_channel.send(JSON.stringify(imageEvent))
+      console.log('Whiteboard image sent to OpenAI')
+    }
   }
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>AI Math Tutor</h1>
+        <h1>🍕 AI Math Tutor</h1>
+        {currentStage && (
+          <div style={{ fontSize: '14px', marginTop: '8px' }}>
+            Stage {currentStage.stage_id}: {currentStage.learning_objective}
+          </div>
+        )}
       </header>
 
       <main className="app-main">
-        {!currentStage ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
-            <StageDisplay stage={null} />
+        {!sessionState ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+            <h2>Welcome to AI Math Tutor!</h2>
+            <p style={{ fontSize: '18px', marginBottom: '30px' }}>
+              Learn division with remainders through interactive pizza problems
+            </p>
             <button
               onClick={handleStartLesson}
               style={{
@@ -69,7 +341,7 @@ function App() {
                 border: 'none',
                 borderRadius: '8px',
                 cursor: 'pointer',
-                marginTop: '20px',
+                fontWeight: 'bold'
               }}
             >
               Start Lesson
@@ -79,25 +351,45 @@ function App() {
           <>
             <StageDisplay stage={currentStage} />
 
-            {!sessionStarted && (
+            {!isVoiceActive ? (
               <VoiceInterface onSessionCreate={handleSessionCreate} />
-            )}
-
-            {sessionStarted && (
-              <div>
-                <div style={{ margin: '20px 0', textAlign: 'center' }}>
-                  <span style={{
-                    display: 'inline-block',
-                    padding: '8px 16px',
-                    backgroundColor: '#28a745',
-                    color: 'white',
-                    borderRadius: '4px'
-                  }}>
-                    ✓ Voice Session Active
+            ) : (
+              <>
+                <div style={{
+                  margin: '20px 0',
+                  textAlign: 'center',
+                  padding: '12px',
+                  backgroundColor: '#d4edda',
+                  borderRadius: '8px'
+                }}>
+                  <span style={{ color: '#155724', fontWeight: 'bold' }}>
+                    ✓ Voice Session Active - Start talking!
                   </span>
                 </div>
-                <Whiteboard onUpdate={handleWhiteboardUpdate} />
-              </div>
+
+                <Whiteboard onUpdate={handleWhiteboardImageUpdate} />
+
+                {/* Conversation Log */}
+                <div style={{
+                  marginTop: '20px',
+                  padding: '20px',
+                  backgroundColor: '#f8f9fa',
+                  borderRadius: '8px',
+                  maxHeight: '200px',
+                  overflowY: 'auto'
+                }}>
+                  <h3 style={{ marginTop: 0 }}>Conversation:</h3>
+                  {conversationLog.length === 0 ? (
+                    <p style={{ color: '#6c757d' }}>Conversation will appear here...</p>
+                  ) : (
+                    conversationLog.map((msg, i) => (
+                      <div key={i} style={{ marginBottom: '8px', fontSize: '14px' }}>
+                        {msg}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
             )}
           </>
         )}

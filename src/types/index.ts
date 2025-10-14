@@ -27,5 +27,13 @@ export interface SessionState {
   lesson_id: string
   current_stage: number
   stage_start_time: Date
-  whiteboard_state?: string
+  whiteboard_image_url?: string
+  peer_connection: RTCPeerConnection | null
+  data_channel: RTCDataChannel | null
+}
+
+export interface ConversationEvent {
+  type: string
+  timestamp: Date
+  data: any
 }
