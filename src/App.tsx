@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import StageDisplay from './components/StageDisplay'
 import Whiteboard from './components/Whiteboard'
 import VoiceInterface from './components/VoiceInterface'
+import Transcript, { type TranscriptEntry } from './components/Transcript'
 import { getLesson } from './data/lessons'
 import type { Stage, SessionState } from './types'
 import './App.css'
@@ -10,8 +11,9 @@ function App() {
   const [sessionState, setSessionState] = useState<SessionState | null>(null)
   const [currentStage, setCurrentStage] = useState<Stage | null>(null)
   const [isVoiceActive, setIsVoiceActive] = useState(false)
-  const [conversationLog, setConversationLog] = useState<string[]>([])
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const whiteboardImageRef = useRef<string>('')
+  const processedItemIds = useRef(new Set<string>())
 
   // Initialize lesson
   const handleStartLesson = () => {
@@ -40,8 +42,12 @@ function App() {
     return 'session_' + Math.random().toString(36).substring(2, 15)
   }
 
-  const addToLog = (message: string) => {
-    setConversationLog(prev => [...prev, message])
+  const addToTranscript = (speaker: 'ai' | 'student', text: string) => {
+    setTranscript(prev => [...prev, {
+      speaker,
+      text,
+      timestamp: new Date()
+    }])
   }
 
   // Handle WebRTC session creation
@@ -85,7 +91,23 @@ function App() {
     const updateEvent = {
       type: 'session.update',
       session: {
-        instructions: `You are a helpful math tutor. You must ALWAYS respond in English only. Never use any other language. Start by presenting the problem to the student. ${stage.context_for_agent}`,
+        instructions: `You are a friendly math tutor helping a 10-year-old student. Use age-appropriate language and keep your responses short and conversational.
+
+Current Problem: ${stage.problem}
+
+Success Criteria: ${stage.success_criteria}
+
+CRITICAL RULES:
+- NEVER give away answers or do calculations for the student
+- NEVER say the numbers from calculations (let them figure it out)
+- NEVER tell them what operation to use (like "divide" or "multiply")
+- Ask ONE simple question at a time that helps them think through the next small step
+- If they're stuck, ask about what they already know
+- Build on their ideas, even if imperfect - guide them gently from where they are
+- Keep responses to 1-2 short sentences maximum
+- When the student meets the success criteria, call stage_complete()
+
+Start by greeting them warmly and asking what they notice about the problem.`,
         input_audio_transcription: {
           model: 'whisper-1'
         },
@@ -93,7 +115,9 @@ function App() {
           type: 'server_vad',
           threshold: 0.6,
           prefix_padding_ms: 300,
-          silence_duration_ms: 1000
+          silence_duration_ms: 1000,
+          create_response: true,
+          interrupt_response: false
         },
         tools: [
           {
@@ -180,20 +204,55 @@ function App() {
         handleFunctionCall(event)
         break
 
-      case 'response.audio_transcript.done':
-        if (event.transcript) {
-          addToLog(`AI: ${event.transcript}`)
+      case 'response.output_audio_transcript.done':
+        // AI speech transcript - correct event type for output audio
+        if (event.transcript && event.item_id) {
+          // Prevent duplicate transcripts using item_id tracking
+          if (processedItemIds.current.has(event.item_id)) {
+            console.log('Skipping duplicate AI transcript for item:', event.item_id)
+            break
+          }
+
+          processedItemIds.current.add(event.item_id)
+          console.log('AI transcript (done):', event.transcript)
+          addToTranscript('ai', event.transcript)
         }
         break
 
+      case 'response.output_audio_transcript.delta':
+        // AI speech transcript delta - streaming updates (logged but not added to transcript yet)
+        console.log('AI transcript delta:', event.delta)
+        break
+
       case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript) {
-          addToLog(`Student: ${event.transcript}`)
+        // Student speech transcript - asynchronous, arrives without guaranteed timing
+        if (event.transcript && event.item_id) {
+          // Prevent duplicate transcripts using item_id tracking
+          if (processedItemIds.current.has(event.item_id)) {
+            console.log('Skipping duplicate student transcript for item:', event.item_id)
+            break
+          }
+
+          processedItemIds.current.add(event.item_id)
+          console.log('Student transcript:', event.transcript)
+          addToTranscript('student', event.transcript)
         }
+        break
+
+      case 'conversation.item.input_audio_transcription.delta':
+        // Student speech transcript delta - streaming updates (logged but not added yet)
+        console.log('Student transcript delta:', event.delta)
         break
 
       case 'error':
         console.error('OpenAI error:', event.error)
+        break
+
+      default:
+        // Log any transcript-related events we might be missing
+        if (event.type.includes('transcript') || event.type.includes('audio')) {
+          console.log('Unhandled audio/transcript event:', event.type, event)
+        }
         break
     }
   }
@@ -217,7 +276,9 @@ function App() {
     if (!sessionState) return
 
     console.log('Stage complete:', reasoning)
-    addToLog(`[Stage ${currentStage?.stage_id} completed: ${reasoning}]`)
+
+    // Show "Correct!" alert
+    alert('Correct!')
 
     const lesson = getLesson(sessionState.lesson_id)
     if (!lesson) return
@@ -234,9 +295,6 @@ function App() {
         current_stage: nextStageIndex,
         stage_start_time: new Date()
       })
-
-      // Show transition UI
-      alert(`Great work! Moving to Stage ${nextStage.stage_id}`)
 
       // Update session instructions for new stage
       if (sessionState.data_channel) {
@@ -319,7 +377,7 @@ function App() {
         <h1>🍕 AI Math Tutor</h1>
         {currentStage && (
           <div style={{ fontSize: '14px', marginTop: '8px' }}>
-            Stage {currentStage.stage_id}: {currentStage.learning_objective}
+            Stage {currentStage.stage_id}
           </div>
         )}
       </header>
@@ -348,50 +406,58 @@ function App() {
             </button>
           </div>
         ) : (
-          <>
-            <StageDisplay stage={currentStage} />
+          <div style={{
+            display: 'flex',
+            gap: '20px',
+            height: 'calc(100vh - 80px)',
+            padding: '20px 80px'
+          }}>
+            {/* Left column: Problem image and text (25%) */}
+            <div style={{
+              flex: '0 0 25%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+              overflow: 'auto'
+            }}>
+              <StageDisplay stage={currentStage} />
+            </div>
 
-            {!isVoiceActive ? (
-              <VoiceInterface onSessionCreate={handleSessionCreate} />
-            ) : (
-              <>
-                <div style={{
-                  margin: '20px 0',
-                  textAlign: 'center',
-                  padding: '12px',
-                  backgroundColor: '#d4edda',
-                  borderRadius: '8px'
-                }}>
-                  <span style={{ color: '#155724', fontWeight: 'bold' }}>
-                    ✓ Voice Session Active - Start talking!
-                  </span>
-                </div>
+            {/* Middle column: Whiteboard (50%) */}
+            <div style={{
+              flex: '0 0 50%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+              overflow: 'auto'
+            }}>
+              {isVoiceActive ? (
+                <>
+                  <div style={{
+                    padding: '12px',
+                    backgroundColor: '#d4edda',
+                    borderRadius: '8px',
+                    textAlign: 'center'
+                  }}>
+                    <span style={{ color: '#155724', fontWeight: 'bold' }}>
+                      ✓ Voice Session Active - Start talking!
+                    </span>
+                  </div>
 
-                <Whiteboard onUpdate={handleWhiteboardImageUpdate} />
+                  <Whiteboard onUpdate={handleWhiteboardImageUpdate} />
+                </>
+              ) : (
+                <VoiceInterface stage={currentStage} onSessionCreate={handleSessionCreate} />
+              )}
+            </div>
 
-                {/* Conversation Log */}
-                <div style={{
-                  marginTop: '20px',
-                  padding: '20px',
-                  backgroundColor: '#f8f9fa',
-                  borderRadius: '8px',
-                  maxHeight: '200px',
-                  overflowY: 'auto'
-                }}>
-                  <h3 style={{ marginTop: 0 }}>Conversation:</h3>
-                  {conversationLog.length === 0 ? (
-                    <p style={{ color: '#6c757d' }}>Conversation will appear here...</p>
-                  ) : (
-                    conversationLog.map((msg, i) => (
-                      <div key={i} style={{ marginBottom: '8px', fontSize: '14px' }}>
-                        {msg}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </>
-            )}
-          </>
+            {/* Right column: Transcript (25%) */}
+            <div style={{
+              flex: '0 0 25%'
+            }}>
+              <Transcript entries={transcript} />
+            </div>
+          </div>
         )}
       </main>
     </div>

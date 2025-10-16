@@ -1,55 +1,82 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
-// Session configuration for the unified interface
-const sessionConfig = JSON.stringify({
-  type: 'realtime',
-  model: 'gpt-realtime',
-  audio: {
-    output: { voice: 'alloy' }
-  },
-  instructions: `You are a helpful math tutor. You must ALWAYS respond in English only. Never use Spanish or any other language.
-
-The student is working on a pizza division problem: "I've got two friends coming over later today, I've got two pizzas, and each pizza is cut into 8 slices. The three of us want to share the two pizzas, but we're not sure how to do it so we all get the same amount of pizza."
-
-Your goal is to guide the student to discover that 16÷3 = 5 remainder 1. Accept creative solutions. DO NOT rush to fractions yet - let them explore the remainder concept. Use the whiteboard to visualize if helpful. Call stage_complete() when the student clearly understands there's one slice left over after equal distribution.`,
-  tools: [
-    {
-      type: 'function',
-      name: 'stage_complete',
-      description: 'Call this when the student has demonstrated mastery of the current learning objective',
-      parameters: {
-        type: 'object',
-        properties: {
-          reasoning: {
-            type: 'string',
-            description: 'Brief explanation of why student is ready to advance'
-          }
+// Generate session config dynamically based on stage data
+function generateSessionConfig(problem: string, successCriteria: string) {
+  return JSON.stringify({
+    type: 'realtime',
+    model: 'gpt-realtime',
+    audio: {
+      input: {
+        transcription: {
+          model: 'whisper-1'
         },
-        required: ['reasoning']
-      }
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.6,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 1000,
+          create_response: true,
+          interrupt_response: false
+        }
+      },
+      output: { voice: 'alloy' }
     },
-    {
-      type: 'function',
-      name: 'update_whiteboard',
-      description: 'Add or modify content on the interactive whiteboard',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['draw', 'highlight', 'label', 'clear'],
-            description: 'Type of whiteboard action'
+    instructions: `You are a friendly math tutor helping a 10-year-old student. Use age-appropriate language and keep your responses short and conversational.
+
+Current Problem: ${problem}
+
+Success Criteria: ${successCriteria}
+
+CRITICAL RULES:
+- NEVER give away answers or do calculations for the student
+- NEVER say the numbers from calculations (let them figure it out)
+- NEVER tell them what operation to use (like "divide" or "multiply")
+- Ask ONE simple question at a time that helps them think through the next small step
+- If they're stuck, ask about what they already know
+- Build on their ideas, even if imperfect - guide them gently from where they are
+- Keep responses to 1-2 short sentences maximum
+- When the student meets the success criteria, call stage_complete()
+
+Start by greeting them warmly and asking what they notice about the problem.`,
+    tools: [
+      {
+        type: 'function',
+        name: 'stage_complete',
+        description: 'Call this when the student has demonstrated mastery of the current learning objective',
+        parameters: {
+          type: 'object',
+          properties: {
+            reasoning: {
+              type: 'string',
+              description: 'Brief explanation of why student is ready to advance'
+            }
           },
-          description: {
-            type: 'string',
-            description: 'Natural language description of what to draw/modify'
-          }
-        },
-        required: ['action', 'description']
+          required: ['reasoning']
+        }
+      },
+      {
+        type: 'function',
+        name: 'update_whiteboard',
+        description: 'Add or modify content on the interactive whiteboard',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['draw', 'highlight', 'label', 'clear'],
+              description: 'Type of whiteboard action'
+            },
+            description: {
+              type: 'string',
+              description: 'Natural language description of what to draw/modify'
+            }
+          },
+          required: ['action', 'description']
+        }
       }
-    }
-  ]
-})
+    ]
+  })
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -58,15 +85,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { sdp: clientSdp } = req.body
+    const { sdp: clientSdp, stage } = req.body
 
     console.log('=== BACKEND: Received Request ===')
     console.log('SDP length:', clientSdp?.length || 0)
+    console.log('Stage data:', stage)
     console.log('================================')
 
     if (!clientSdp || typeof clientSdp !== 'string' || !clientSdp.trim()) {
       return res.status(400).json({ error: 'Invalid or missing SDP in JSON body' })
     }
+
+    if (!stage || !stage.problem || !stage.success_criteria) {
+      return res.status(400).json({ error: 'Missing stage data (problem and success_criteria required)' })
+    }
+
+    // Generate session config dynamically from stage data
+    const sessionConfig = generateSessionConfig(stage.problem, stage.success_criteria)
 
     // Use the unified interface - send FormData with SDP and session config
     const fd = new FormData()

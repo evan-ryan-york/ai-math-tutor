@@ -1,13 +1,9 @@
 export interface Stage {
   stage_id: number
+  image_path?: string
+  visual_url?: string // Computed at runtime from image_path
   problem: string
-  visual_url?: string
-  learning_objective: string
-  mastery_criteria: {
-    description: string
-    indicators: string[]
-  }
-  context_for_agent: string
+  success_criteria: string
 }
 
 export interface Lesson {

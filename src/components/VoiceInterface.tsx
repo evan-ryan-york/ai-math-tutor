@@ -1,10 +1,12 @@
 import { useState, useRef } from 'react'
+import type { Stage } from '../types'
 
 interface VoiceInterfaceProps {
+  stage: Stage | null
   onSessionCreate: (pc: RTCPeerConnection, dc: RTCDataChannel) => void
 }
 
-export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps) {
+export default function VoiceInterface({ stage, onSessionCreate }: VoiceInterfaceProps) {
   const [status, setStatus] = useState('Ready to connect')
   const [isConnecting, setIsConnecting] = useState(false)
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
@@ -71,7 +73,13 @@ export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps)
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ sdp: offer.sdp }),
+        body: JSON.stringify({
+          sdp: offer.sdp,
+          stage: stage ? {
+            problem: stage.problem,
+            success_criteria: stage.success_criteria
+          } : null
+        }),
       }
 
       // 2. Log the entire request object before sending
