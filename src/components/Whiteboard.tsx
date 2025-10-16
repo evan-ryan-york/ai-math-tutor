@@ -164,7 +164,8 @@ export default function Whiteboard({ onUpdate }: WhiteboardProps) {
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    // Don't send the initial blank canvas to AI
+    // Send the initial blank canvas so AI can draw on it from the start
+    captureAndSendImage()
 
     // Listen for AI drawing commands
     const handleAIDrawing = (event: any) => {
