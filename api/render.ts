@@ -18,11 +18,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { imageDataUrl, action, description } = req.body
+    const { imageDataUrl, action = 'draw', description } = req.body
 
-    if (!imageDataUrl || !action || !description) {
+    if (!imageDataUrl || !description) {
       return res.status(400).json({
-        error: 'Missing required fields: imageDataUrl, action, description'
+        error: 'Missing required fields: imageDataUrl, description'
       })
     }
 
@@ -30,8 +30,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 Current whiteboard state: [See attached image]
 
-Requested action: ${action}
-Description: ${description}
+Request: ${description}
+${action !== 'draw' ? `Action type: ${action}` : ''}
 
 Generate canvas drawing commands to fulfill this request. Return JSON with an array of drawing primitives.
 

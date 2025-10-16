@@ -37,6 +37,13 @@ CRITICAL RULES:
 - Keep responses to 1-2 short sentences maximum
 - When the student meets the success criteria, call stage_complete()
 
+VISUAL TEACHING:
+- Use update_whiteboard() to draw helpful visual representations
+- Draw early in the lesson to establish the problem visually
+- Examples: update_whiteboard({description: "Draw 16 pizza slices in a 4x4 grid"})
+- You can see what's on the whiteboard and what the student has drawn
+- Use visuals to reinforce concepts, but let the student do their own work
+
 Start by greeting them warmly and asking what they notice about the problem.`,
     tools: [
       {
@@ -57,21 +64,16 @@ Start by greeting them warmly and asking what they notice about the problem.`,
       {
         type: 'function',
         name: 'update_whiteboard',
-        description: 'Add or modify content on the interactive whiteboard',
+        description: 'Draw visual elements on the whiteboard to help illustrate mathematical concepts. Use this to show the problem visually, create groupings, label items, or add helpful annotations.',
         parameters: {
           type: 'object',
           properties: {
-            action: {
-              type: 'string',
-              enum: ['draw', 'highlight', 'label', 'clear'],
-              description: 'Type of whiteboard action'
-            },
             description: {
               type: 'string',
-              description: 'Natural language description of what to draw/modify'
+              description: 'Natural language description of what to draw. Examples: "Draw 16 pizza slices arranged in a 4x4 grid", "Circle the leftover slice in red", "Draw lines to show 3 equal groups", "Label each group with the number of slices"'
             }
           },
-          required: ['action', 'description']
+          required: ['description']
         }
       }
     ]

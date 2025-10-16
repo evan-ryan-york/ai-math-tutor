@@ -284,7 +284,7 @@ function App() {
   }
 
   // Handle whiteboard drawing request from AI
-  const handleWhiteboardUpdate = async (args: { action: string; description: string }) => {
+  const handleWhiteboardUpdate = async (args: { description: string }) => {
     console.log('Whiteboard update requested:', args)
 
     if (!whiteboardImageRef.current) {
@@ -301,7 +301,6 @@ function App() {
         },
         body: JSON.stringify({
           imageDataUrl: whiteboardImageRef.current,
-          action: args.action,
           description: args.description
         })
       })
@@ -311,6 +310,8 @@ function App() {
       }
 
       const result = await response.json()
+
+      console.log('Drawing commands generated:', result)
 
       // Trigger drawing on whiteboard component
       window.dispatchEvent(new CustomEvent('whiteboard-draw', {
