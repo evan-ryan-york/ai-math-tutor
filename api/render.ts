@@ -62,13 +62,13 @@ Return ONLY the JSON object with "commands" array:`
     const base64Data = imageDataUrl.split(',')[1]
     const mimeType = imageDataUrl.split(';')[0].split(':')[1]
 
-    // Use Gemini 2.5 Flash - best for multimodal reasoning and image understanding
+    // Use Gemini Flash for multimodal reasoning and image understanding
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-1.5-flash',
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.7,
-        maxOutputTokens: 1000
+        maxOutputTokens: 2000
       }
     })
 
