@@ -67,7 +67,7 @@ Return ONLY the JSON object with "commands" array:`
       model: 'gemini-2.5-flash',
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 2000
+        maxOutputTokens: 8192
       }
     })
 
