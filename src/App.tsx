@@ -132,6 +132,9 @@ function App() {
 
     switch (event.type) {
       case 'response.function_call_arguments.done':
+        console.log('=== FUNCTION CALL ARGUMENTS DONE ===')
+        console.log('Full event:', JSON.stringify(event, null, 2))
+        console.log('====================================')
         handleFunctionCall(event)
         break
 
@@ -193,12 +196,18 @@ function App() {
     const functionName = event.name
     const args = JSON.parse(event.arguments)
 
-    console.log(`Function called: ${functionName}`, args)
+    console.log('=== FUNCTION CALL RECEIVED ===')
+    console.log('Function name:', functionName)
+    console.log('Arguments:', args)
+    console.log('Event:', event)
+    console.log('==============================')
 
     if (functionName === 'stage_complete') {
       await handleStageComplete(args.reasoning)
     } else if (functionName === 'update_whiteboard') {
       await handleWhiteboardUpdate(args)
+    } else {
+      console.warn('Unknown function called:', functionName)
     }
   }
 
@@ -285,10 +294,13 @@ function App() {
 
   // Handle whiteboard drawing request from AI
   const handleWhiteboardUpdate = async (args: { description: string }) => {
-    console.log('Whiteboard update requested:', args)
+    console.log('=== WHITEBOARD UPDATE REQUESTED ===')
+    console.log('Description:', args.description)
+    console.log('Has whiteboard image:', !!whiteboardImageRef.current)
+    console.log('===================================')
 
     if (!whiteboardImageRef.current) {
-      console.warn('No whiteboard image available yet')
+      console.warn('No whiteboard image available yet - cannot draw')
       return
     }
 
