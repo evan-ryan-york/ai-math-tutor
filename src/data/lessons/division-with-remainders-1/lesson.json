@@ -11,9 +11,9 @@
     },
     {
       "stage_id": 2,
-      "image_path": "./images/brownie-pan.jpg",
+      "image_path": "./images/2-different-pizzas.png",
       "problem": "Actually, one pizza is cheese and the other is pepperoni. Everyone wants equal amounts of BOTH types. How does that change things?",
-      "success_criteria": "Student understands each pizza must be divided by 3 separately"
+      "success_criteria": "Student identifies that now everyone will get two pepperoni and two cheese, and now there will be 4 slices left over."
     }
   ]
 }

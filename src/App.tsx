@@ -14,6 +14,8 @@ function App() {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const whiteboardImageRef = useRef<string>('')
   const processedItemIds = useRef(new Set<string>())
+  const messageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null)
+  const openHandlerRef = useRef<(() => void) | null>(null)
 
   // Initialize lesson
   const handleStartLesson = () => {
@@ -54,6 +56,13 @@ function App() {
   const handleSessionCreate = (pc: RTCPeerConnection, dc: RTCDataChannel) => {
     if (!sessionState) return
 
+    // Clear transcript when starting a new stage
+    if (sessionState.current_stage > 0) {
+      setTranscript([])
+      // Clear processed item IDs to allow fresh transcripts
+      processedItemIds.current.clear()
+    }
+
     // Update session state with WebRTC connections
     setSessionState({
       ...sessionState,
@@ -61,122 +70,44 @@ function App() {
       data_channel: dc
     })
 
-    // Listen for server events from OpenAI
-    dc.addEventListener('message', (event) => {
+    // Flag to track if we've sent the initial response
+    let initialResponseSent = false
+
+    // Create message handler
+    const messageHandler = (event: MessageEvent) => {
       const serverEvent = JSON.parse(event.data)
       handleServerEvent(serverEvent)
-    })
 
-    dc.addEventListener('open', () => {
-      console.log('Data channel opened - session already configured via /calls endpoint')
+      // Wait for session.updated event before triggering AI response
+      if (serverEvent.type === 'session.updated' && !initialResponseSent) {
+        initialResponseSent = true
 
-      // The session is already configured via the FormData sent to /calls
-      // Just trigger the AI to start speaking
-      const responseCreateEvent = {
-        type: 'response.create'
+        const responseCreateEvent = {
+          type: 'response.create'
+        }
+
+        console.log('=== TRIGGERING INITIAL AI RESPONSE (after session.updated) ===')
+        console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
+        console.log('===============================================================')
+
+        dc.send(JSON.stringify(responseCreateEvent))
       }
+    }
 
-      console.log('=== TRIGGERING INITIAL AI RESPONSE ===')
-      console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
-      console.log('======================================')
+    // Create open handler
+    const openHandler = () => {
+      console.log('Data channel opened - waiting for session.updated before triggering AI')
+    }
 
-      dc.send(JSON.stringify(responseCreateEvent))
-    })
+    // Store handlers in refs so we can remove them later
+    messageHandlerRef.current = messageHandler
+    openHandlerRef.current = openHandler
+
+    // Listen for server events from OpenAI
+    dc.addEventListener('message', messageHandler)
+    dc.addEventListener('open', openHandler)
 
     setIsVoiceActive(true)
-  }
-
-  // Send session update to OpenAI Realtime API
-  const sendSessionUpdate = (dc: RTCDataChannel, stage: Stage) => {
-    const updateEvent = {
-      type: 'session.update',
-      session: {
-        instructions: `You are a friendly math tutor helping a 10-year-old student. Use age-appropriate language and keep your responses short and conversational.
-
-Current Problem: ${stage.problem}
-
-Success Criteria: ${stage.success_criteria}
-
-CRITICAL RULES:
-- NEVER give away answers or do calculations for the student
-- NEVER say the numbers from calculations (let them figure it out)
-- NEVER tell them what operation to use (like "divide" or "multiply")
-- Ask ONE simple question at a time that helps them think through the next small step
-- If they're stuck, ask about what they already know
-- Build on their ideas, even if imperfect - guide them gently from where they are
-- Keep responses to 1-2 short sentences maximum
-- When the student meets the success criteria, call stage_complete()
-
-Start by greeting them warmly and asking what they notice about the problem.`,
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.6,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 1000,
-          create_response: true,
-          interrupt_response: false
-        },
-        tools: [
-          {
-            type: 'function',
-            name: 'stage_complete',
-            description: 'Call this when the student has demonstrated mastery of the current learning objective',
-            parameters: {
-              type: 'object',
-              properties: {
-                reasoning: {
-                  type: 'string',
-                  description: 'Brief explanation of why student is ready to advance'
-                }
-              },
-              required: ['reasoning']
-            }
-          },
-          {
-            type: 'function',
-            name: 'update_whiteboard',
-            description: 'Add or modify content on the interactive whiteboard',
-            parameters: {
-              type: 'object',
-              properties: {
-                action: {
-                  type: 'string',
-                  enum: ['draw', 'highlight', 'label', 'clear'],
-                  description: 'Type of whiteboard action'
-                },
-                description: {
-                  type: 'string',
-                  description: 'Natural language description of what to draw/modify'
-                }
-              },
-              required: ['action', 'description']
-            }
-          }
-        ]
-      }
-    }
-
-    console.log('=== SENDING SESSION UPDATE ===')
-    console.log('Event type:', updateEvent.type)
-    console.log('Session keys:', Object.keys(updateEvent.session))
-    console.log('Full payload:', JSON.stringify(updateEvent, null, 2))
-    console.log('==============================')
-
-    dc.send(JSON.stringify(updateEvent))
-
-    // Now trigger a response from the AI
-    const responseCreateEvent = {
-      type: 'response.create'
-    }
-
-    console.log('=== TRIGGERING AI RESPONSE ===')
-    console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
-    console.log('==============================')
-
-    dc.send(JSON.stringify(responseCreateEvent))
   }
 
   // Handle server events from OpenAI
@@ -277,6 +208,51 @@ Start by greeting them warmly and asking what they notice about the problem.`,
 
     console.log('Stage complete:', reasoning)
 
+    // Close WebRTC connections properly
+    if (sessionState.data_channel) {
+      console.log('Closing data channel for stage', sessionState.current_stage)
+      // Remove event listeners that we added
+      const dc = sessionState.data_channel
+      if (messageHandlerRef.current) {
+        dc.removeEventListener('message', messageHandlerRef.current)
+        messageHandlerRef.current = null
+      }
+      if (openHandlerRef.current) {
+        dc.removeEventListener('open', openHandlerRef.current)
+        openHandlerRef.current = null
+      }
+      // Clear other event handlers
+      dc.onopen = null
+      dc.onclose = null
+      dc.onerror = null
+      dc.onmessage = null
+      dc.close()
+    }
+    if (sessionState.peer_connection) {
+      console.log('Closing peer connection for stage', sessionState.current_stage)
+      const pc = sessionState.peer_connection
+      // Stop all tracks
+      pc.getSenders().forEach(sender => {
+        if (sender.track) {
+          sender.track.stop()
+        }
+      })
+      pc.getReceivers().forEach(receiver => {
+        if (receiver.track) {
+          receiver.track.stop()
+        }
+      })
+      // Remove all event listeners
+      pc.ontrack = null
+      pc.onicecandidate = null
+      pc.oniceconnectionstatechange = null
+      pc.onconnectionstatechange = null
+      pc.close()
+    }
+
+    // Update state to show we're no longer in voice session
+    setIsVoiceActive(false)
+
     // Show "Correct!" alert
     alert('Correct!')
 
@@ -286,24 +262,24 @@ Start by greeting them warmly and asking what they notice about the problem.`,
     const nextStageIndex = sessionState.current_stage + 1
 
     if (nextStageIndex < lesson.stages.length) {
-      // Advance to next stage
+      // Advance to next stage (but don't start voice yet)
       const nextStage = lesson.stages[nextStageIndex]
 
       setCurrentStage(nextStage)
       setSessionState({
         ...sessionState,
         current_stage: nextStageIndex,
-        stage_start_time: new Date()
+        stage_start_time: new Date(),
+        peer_connection: null,
+        data_channel: null
       })
 
-      // Update session instructions for new stage
-      if (sessionState.data_channel) {
-        sendSessionUpdate(sessionState.data_channel, nextStage)
-      }
+      // Don't send session update - wait for user to click "Start Next Stage"
     } else {
       // Lesson complete
       alert('Congratulations! You completed the entire lesson!')
       console.log('Lesson completed')
+      setCurrentStage(null)
     }
   }
 
@@ -444,10 +420,45 @@ Start by greeting them warmly and asking what they notice about the problem.`,
                     </span>
                   </div>
 
-                  <Whiteboard onUpdate={handleWhiteboardImageUpdate} />
+                  <Whiteboard
+                    key={`whiteboard-stage-${sessionState.current_stage}`}
+                    onUpdate={handleWhiteboardImageUpdate}
+                  />
                 </>
               ) : (
-                <VoiceInterface stage={currentStage} onSessionCreate={handleSessionCreate} />
+                <>
+                  {sessionState.current_stage > 0 && (
+                    <div style={{
+                      padding: '20px',
+                      backgroundColor: '#fff3cd',
+                      borderRadius: '12px',
+                      border: '2px solid #ffc107',
+                      textAlign: 'center',
+                      marginBottom: '20px'
+                    }}>
+                      <p style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '18px',
+                        fontWeight: 'bold',
+                        color: '#856404'
+                      }}>
+                        🎉 Great job! Ready for the next stage?
+                      </p>
+                      <p style={{
+                        margin: '0',
+                        fontSize: '14px',
+                        color: '#856404'
+                      }}>
+                        Click below to start a new voice session for Stage {currentStage?.stage_id}
+                      </p>
+                    </div>
+                  )}
+                  <VoiceInterface
+                    stage={currentStage}
+                    onSessionCreate={handleSessionCreate}
+                    isNextStage={sessionState.current_stage > 0}
+                  />
+                </>
               )}
             </div>
 
