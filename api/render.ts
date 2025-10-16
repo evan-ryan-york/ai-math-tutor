@@ -66,9 +66,8 @@ Return ONLY the JSON object with "commands" array:`
     const model = genAI.getGenerativeModel({
       model: 'gemini-2.5-flash',
       generationConfig: {
-        responseMimeType: 'application/json',
         temperature: 0.7,
-        maxOutputTokens: 1000
+        maxOutputTokens: 2000
       }
     })
 
@@ -83,17 +82,43 @@ Return ONLY the JSON object with "commands" array:`
     ])
 
     const response = await result.response
-    const text = response.text()
+    let text = response.text()
 
     console.log('=== GEMINI RENDER RESPONSE ===')
     console.log('Description:', description)
     console.log('Response text:', text)
+    console.log('Text length:', text?.length || 0)
     console.log('=============================')
 
-    const drawingCommands = JSON.parse(text || '{"commands":[]}')
+    // Handle empty response
+    if (!text || text.trim().length === 0) {
+      console.error('ERROR: Gemini returned empty response')
+      return res.status(500).json({
+        error: 'Gemini returned empty response',
+        commands: []
+      })
+    }
+
+    // Strip markdown code blocks if present
+    text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+
+    let drawingCommands
+    try {
+      drawingCommands = JSON.parse(text)
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError)
+      console.error('Failed to parse text:', text)
+      return res.status(500).json({
+        error: 'Failed to parse Gemini response as JSON',
+        rawResponse: text,
+        commands: []
+      })
+    }
 
     if (!drawingCommands.commands || drawingCommands.commands.length === 0) {
       console.warn('WARNING: Gemini returned empty commands array')
+    } else {
+      console.log('SUCCESS: Generated', drawingCommands.commands.length, 'drawing commands')
     }
 
     return res.status(200).json(drawingCommands)
