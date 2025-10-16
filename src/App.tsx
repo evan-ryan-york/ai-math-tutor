@@ -304,6 +304,13 @@ function App() {
       return
     }
 
+    // Extract canvas dimensions from the data URL by creating a temporary image
+    const img = new Image()
+    await new Promise<void>((resolve) => {
+      img.onload = () => resolve()
+      img.src = whiteboardImageRef.current
+    })
+
     try {
       // Call backend to generate drawing commands
       const response = await fetch('/api/render', {
@@ -313,7 +320,9 @@ function App() {
         },
         body: JSON.stringify({
           imageDataUrl: whiteboardImageRef.current,
-          description: args.description
+          description: args.description,
+          canvasWidth: img.width,
+          canvasHeight: img.height
         })
       })
 

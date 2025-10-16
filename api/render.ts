@@ -18,13 +18,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { imageDataUrl, action = 'draw', description } = req.body
+    const { imageDataUrl, action = 'draw', description, canvasWidth = 800, canvasHeight = 600 } = req.body
 
     if (!imageDataUrl || !description) {
       return res.status(400).json({
         error: 'Missing required fields: imageDataUrl, description'
       })
     }
+
+    console.log('Canvas dimensions:', canvasWidth, 'x', canvasHeight)
 
     const prompt = `You are a whiteboard rendering assistant for an educational math tutoring application.
 
@@ -34,12 +36,15 @@ Task: ${description}
 
 Generate canvas drawing commands to visualize this request on the whiteboard.
 
-IMPORTANT RULES:
-1. The canvas is approximately 800x600 pixels
-2. Draw clearly with good spacing - make it easy for a 10-year-old to see
-3. Use colors to make it engaging (oranges/reds for pizza, etc.)
-4. Return ONLY valid JSON with the exact format shown below
-5. If drawing circles (like pizza slices), space them out nicely in a grid
+CRITICAL RULES:
+1. The canvas is EXACTLY ${canvasWidth} x ${canvasHeight} pixels
+2. ALL coordinates must fit within: x: 0 to ${canvasWidth}, y: 0 to ${canvasHeight}
+3. Center your drawing and use the full space effectively
+4. For "2 pizzas side by side", position them at approximately x: ${Math.round(canvasWidth * 0.3)} and x: ${Math.round(canvasWidth * 0.7)}
+5. Use radius around ${Math.min(canvasWidth, canvasHeight) * 0.12} for pizzas
+6. Draw clearly with good spacing - make it easy for a 10-year-old to see
+7. Use engaging colors (oranges/reds for pizza, etc.)
+8. Return ONLY valid JSON with the exact format shown below
 
 Available drawing primitives:
 - circle: {type: "circle", x: number, y: number, radius: number, fill: "color", stroke: "color", strokeWidth: number}
