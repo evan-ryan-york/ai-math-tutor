@@ -18,32 +18,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { imageDataUrl, action, description } = req.body
+    const { imageDataUrl, action = 'draw', description, canvasWidth = 800, canvasHeight = 600 } = req.body
 
-    if (!imageDataUrl || !action || !description) {
+    if (!imageDataUrl || !description) {
       return res.status(400).json({
-        error: 'Missing required fields: imageDataUrl, action, description'
+        error: 'Missing required fields: imageDataUrl, description'
       })
     }
 
-    const prompt = `You are a whiteboard rendering assistant for an educational math application.
+    console.log('Canvas dimensions:', canvasWidth, 'x', canvasHeight)
 
-Current whiteboard state: [See attached image]
+    const prompt = `You are a whiteboard rendering assistant for an educational math tutoring application.
 
-Requested action: ${action}
-Description: ${description}
+Current whiteboard state: See the attached image (the whiteboard may be blank or have student drawings)
 
-Generate canvas drawing commands to fulfill this request. Return JSON with an array of drawing primitives.
+Task: ${description}
 
-Available primitives:
-- circle: {type: "circle", x, y, radius, fill, stroke, strokeWidth, opacity}
-- rectangle: {type: "rect", x, y, width, height, fill, stroke, strokeWidth, opacity}
-- line: {type: "line", x1, y1, x2, y2, stroke, strokeWidth}
-- arrow: {type: "arrow", x1, y1, x2, y2, stroke, strokeWidth, headSize}
-- text: {type: "text", x, y, content, fontSize, fill, font}
-- path: {type: "path", d: "SVG path string", fill, stroke, strokeWidth}
+Generate canvas drawing commands to visualize this request on the whiteboard.
 
-Return ONLY valid JSON: {"commands": [...]}`
+CRITICAL RULES:
+1. The canvas is EXACTLY ${canvasWidth} x ${canvasHeight} pixels
+2. ALL coordinates must fit within: x: 0 to ${canvasWidth}, y: 0 to ${canvasHeight}
+3. Center your drawing and use the full space effectively
+4. For "2 pizzas side by side", position them at approximately x: ${Math.round(canvasWidth * 0.3)} and x: ${Math.round(canvasWidth * 0.7)}
+5. Use radius around ${Math.min(canvasWidth, canvasHeight) * 0.12} for pizzas
+6. Draw clearly with good spacing - make it easy for a 10-year-old to see
+7. Use engaging colors (oranges/reds for pizza, etc.)
+8. Return ONLY valid JSON with the exact format shown below
+
+Available drawing primitives:
+- circle: {type: "circle", x: number, y: number, radius: number, fill: "color", stroke: "color", strokeWidth: number}
+- rect: {type: "rect", x: number, y: number, width: number, height: number, fill: "color", stroke: "color", strokeWidth: number}
+- line: {type: "line", x1: number, y1: number, x2: number, y2: number, stroke: "color", strokeWidth: number}
+- text: {type: "text", x: number, y: number, content: "string", fontSize: number, fill: "color", font: "Arial"}
+
+Example output for "Draw 2 pizzas with 8 slices each":
+{
+  "commands": [
+    {"type": "circle", "x": 200, "y": 300, "radius": 80, "fill": "#FFD700", "stroke": "#FF8C00", "strokeWidth": 3},
+    {"type": "line", "x1": 200, "y1": 220, "x2": 200, "y2": 380, "stroke": "#FF8C00", "strokeWidth": 2},
+    {"type": "line", "x1": 120, "y1": 300, "x2": 280, "y2": 300, "stroke": "#FF8C00", "strokeWidth": 2}
+  ]
+}
+
+Return ONLY the JSON object with "commands" array:`
 
     // Convert base64 data URL to format Gemini expects
     const base64Data = imageDataUrl.split(',')[1]
@@ -53,9 +71,8 @@ Return ONLY valid JSON: {"commands": [...]}`
     const model = genAI.getGenerativeModel({
       model: 'gemini-2.5-flash',
       generationConfig: {
-        responseMimeType: 'application/json',
         temperature: 0.7,
-        maxOutputTokens: 1000
+        maxOutputTokens: 8192
       }
     })
 
@@ -70,8 +87,44 @@ Return ONLY valid JSON: {"commands": [...]}`
     ])
 
     const response = await result.response
-    const text = response.text()
-    const drawingCommands = JSON.parse(text || '{"commands":[]}')
+    let text = response.text()
+
+    console.log('=== GEMINI RENDER RESPONSE ===')
+    console.log('Description:', description)
+    console.log('Response text:', text)
+    console.log('Text length:', text?.length || 0)
+    console.log('=============================')
+
+    // Handle empty response
+    if (!text || text.trim().length === 0) {
+      console.error('ERROR: Gemini returned empty response')
+      return res.status(500).json({
+        error: 'Gemini returned empty response',
+        commands: []
+      })
+    }
+
+    // Strip markdown code blocks if present
+    text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+
+    let drawingCommands
+    try {
+      drawingCommands = JSON.parse(text)
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError)
+      console.error('Failed to parse text:', text)
+      return res.status(500).json({
+        error: 'Failed to parse Gemini response as JSON',
+        rawResponse: text,
+        commands: []
+      })
+    }
+
+    if (!drawingCommands.commands || drawingCommands.commands.length === 0) {
+      console.warn('WARNING: Gemini returned empty commands array')
+    } else {
+      console.log('SUCCESS: Generated', drawingCommands.commands.length, 'drawing commands')
+    }
 
     return res.status(200).json(drawingCommands)
   } catch (error) {

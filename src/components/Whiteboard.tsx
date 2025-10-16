@@ -147,9 +147,12 @@ export default function Whiteboard({ onUpdate }: WhiteboardProps) {
 
     contextRef.current = ctx
 
-    // Set canvas size
-    canvas.width = 800
-    canvas.height = 600
+    // Set canvas size to match container width, maintain aspect ratio
+    const parent = canvas.parentElement
+    if (parent) {
+      canvas.width = parent.clientWidth
+      canvas.height = (parent.clientWidth * 3) / 4 // 4:3 aspect ratio
+    }
 
     // Set default drawing styles
     ctx.strokeStyle = '#000000'
@@ -161,7 +164,8 @@ export default function Whiteboard({ onUpdate }: WhiteboardProps) {
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    // Don't send the initial blank canvas to AI
+    // Send the initial blank canvas so AI can draw on it from the start
+    captureAndSendImage()
 
     // Listen for AI drawing commands
     const handleAIDrawing = (event: any) => {
@@ -248,11 +252,13 @@ export default function Whiteboard({ onUpdate }: WhiteboardProps) {
         onMouseUp={stopDrawing}
         onMouseLeave={stopDrawing}
         style={{
+          width: '100%',
           border: '3px solid #333',
           cursor: 'crosshair',
           backgroundColor: '#ffffff',
           borderRadius: '8px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          display: 'block'
         }}
       />
 

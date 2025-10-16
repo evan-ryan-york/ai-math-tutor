@@ -1,0 +1,19 @@
+{
+  "lesson_id": "division-with-remainders-1",
+  "title": "Sharing Pizzas Fairly",
+  "learning_goal": "Understand division with remainders and basic fractions",
+  "stages": [
+    {
+      "stage_id": 1,
+      "image_path": "./images/2-pizzas.jpg",
+      "problem": "I've got two friends coming over later today, I've got two pizzas, and each pizza is cut into 8 slices. The three of us want to share the two pizzas, how many slices can each person get?",
+      "success_criteria": "Student identifies there's one slice left over after dividing 16 slices among 3 people"
+    },
+    {
+      "stage_id": 2,
+      "image_path": "./images/2-different-pizzas.png",
+      "problem": "Actually, one pizza is cheese and the other is pepperoni. Everyone wants equal amounts of BOTH types. How does that change things?",
+      "success_criteria": "Student identifies that now everyone will get two pepperoni and two cheese, and now there will be 4 slices left over."
+    }
+  ]
+}

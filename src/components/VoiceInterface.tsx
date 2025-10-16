@@ -1,10 +1,13 @@
 import { useState, useRef } from 'react'
+import type { Stage } from '../types'
 
 interface VoiceInterfaceProps {
+  stage: Stage | null
   onSessionCreate: (pc: RTCPeerConnection, dc: RTCDataChannel) => void
+  isNextStage?: boolean
 }
 
-export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps) {
+export default function VoiceInterface({ stage, onSessionCreate, isNextStage = false }: VoiceInterfaceProps) {
   const [status, setStatus] = useState('Ready to connect')
   const [isConnecting, setIsConnecting] = useState(false)
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
@@ -71,7 +74,13 @@ export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps)
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ sdp: offer.sdp }),
+        body: JSON.stringify({
+          sdp: offer.sdp,
+          stage: stage ? {
+            problem: stage.problem,
+            success_criteria: stage.success_criteria
+          } : null
+        }),
       }
 
       // 2. Log the entire request object before sending
@@ -80,6 +89,8 @@ export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps)
       console.log('Headers:', requestOptions.headers)
       console.log(`Body Length: ${requestOptions.body.length}`)
       console.log(`SDP Length: ${offer.sdp?.length}`)
+      console.log('Stage data being sent:', stage)
+      console.log('Parsed body:', JSON.parse(requestOptions.body))
       console.log('-----------------------------')
 
       // 3. Make the fetch call
@@ -156,7 +167,7 @@ export default function VoiceInterface({ onSessionCreate }: VoiceInterfaceProps)
           minWidth: '200px'
         }}
       >
-        {isConnecting ? 'Connecting...' : 'Start Voice Session'}
+        {isConnecting ? 'Connecting...' : (isNextStage ? 'Start Next Stage' : 'Start Voice Session')}
       </button>
 
       <div style={{

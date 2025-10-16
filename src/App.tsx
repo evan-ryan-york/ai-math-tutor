@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import StageDisplay from './components/StageDisplay'
 import Whiteboard from './components/Whiteboard'
 import VoiceInterface from './components/VoiceInterface'
+import Transcript, { type TranscriptEntry } from './components/Transcript'
 import { getLesson } from './data/lessons'
 import type { Stage, SessionState } from './types'
 import './App.css'
@@ -10,8 +11,11 @@ function App() {
   const [sessionState, setSessionState] = useState<SessionState | null>(null)
   const [currentStage, setCurrentStage] = useState<Stage | null>(null)
   const [isVoiceActive, setIsVoiceActive] = useState(false)
-  const [conversationLog, setConversationLog] = useState<string[]>([])
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const whiteboardImageRef = useRef<string>('')
+  const processedItemIds = useRef(new Set<string>())
+  const messageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null)
+  const openHandlerRef = useRef<(() => void) | null>(null)
 
   // Initialize lesson
   const handleStartLesson = () => {
@@ -40,13 +44,24 @@ function App() {
     return 'session_' + Math.random().toString(36).substring(2, 15)
   }
 
-  const addToLog = (message: string) => {
-    setConversationLog(prev => [...prev, message])
+  const addToTranscript = (speaker: 'ai' | 'student', text: string) => {
+    setTranscript(prev => [...prev, {
+      speaker,
+      text,
+      timestamp: new Date()
+    }])
   }
 
   // Handle WebRTC session creation
   const handleSessionCreate = (pc: RTCPeerConnection, dc: RTCDataChannel) => {
     if (!sessionState) return
+
+    // Clear transcript when starting a new stage
+    if (sessionState.current_stage > 0) {
+      setTranscript([])
+      // Clear processed item IDs to allow fresh transcripts
+      processedItemIds.current.clear()
+    }
 
     // Update session state with WebRTC connections
     setSessionState({
@@ -55,104 +70,44 @@ function App() {
       data_channel: dc
     })
 
-    // Listen for server events from OpenAI
-    dc.addEventListener('message', (event) => {
+    // Flag to track if we've sent the initial response
+    let initialResponseSent = false
+
+    // Create message handler
+    const messageHandler = (event: MessageEvent) => {
       const serverEvent = JSON.parse(event.data)
       handleServerEvent(serverEvent)
-    })
 
-    dc.addEventListener('open', () => {
-      console.log('Data channel opened - session already configured via /calls endpoint')
+      // Wait for session.updated event before triggering AI response
+      if (serverEvent.type === 'session.updated' && !initialResponseSent) {
+        initialResponseSent = true
 
-      // The session is already configured via the FormData sent to /calls
-      // Just trigger the AI to start speaking
-      const responseCreateEvent = {
-        type: 'response.create'
+        const responseCreateEvent = {
+          type: 'response.create'
+        }
+
+        console.log('=== TRIGGERING INITIAL AI RESPONSE (after session.updated) ===')
+        console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
+        console.log('===============================================================')
+
+        dc.send(JSON.stringify(responseCreateEvent))
       }
+    }
 
-      console.log('=== TRIGGERING INITIAL AI RESPONSE ===')
-      console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
-      console.log('======================================')
+    // Create open handler
+    const openHandler = () => {
+      console.log('Data channel opened - waiting for session.updated before triggering AI')
+    }
 
-      dc.send(JSON.stringify(responseCreateEvent))
-    })
+    // Store handlers in refs so we can remove them later
+    messageHandlerRef.current = messageHandler
+    openHandlerRef.current = openHandler
+
+    // Listen for server events from OpenAI
+    dc.addEventListener('message', messageHandler)
+    dc.addEventListener('open', openHandler)
 
     setIsVoiceActive(true)
-  }
-
-  // Send session update to OpenAI Realtime API
-  const sendSessionUpdate = (dc: RTCDataChannel, stage: Stage) => {
-    const updateEvent = {
-      type: 'session.update',
-      session: {
-        instructions: `You are a helpful math tutor. You must ALWAYS respond in English only. Never use any other language. Start by presenting the problem to the student. ${stage.context_for_agent}`,
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.6,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 1000
-        },
-        tools: [
-          {
-            type: 'function',
-            name: 'stage_complete',
-            description: 'Call this when the student has demonstrated mastery of the current learning objective',
-            parameters: {
-              type: 'object',
-              properties: {
-                reasoning: {
-                  type: 'string',
-                  description: 'Brief explanation of why student is ready to advance'
-                }
-              },
-              required: ['reasoning']
-            }
-          },
-          {
-            type: 'function',
-            name: 'update_whiteboard',
-            description: 'Add or modify content on the interactive whiteboard',
-            parameters: {
-              type: 'object',
-              properties: {
-                action: {
-                  type: 'string',
-                  enum: ['draw', 'highlight', 'label', 'clear'],
-                  description: 'Type of whiteboard action'
-                },
-                description: {
-                  type: 'string',
-                  description: 'Natural language description of what to draw/modify'
-                }
-              },
-              required: ['action', 'description']
-            }
-          }
-        ]
-      }
-    }
-
-    console.log('=== SENDING SESSION UPDATE ===')
-    console.log('Event type:', updateEvent.type)
-    console.log('Session keys:', Object.keys(updateEvent.session))
-    console.log('Full payload:', JSON.stringify(updateEvent, null, 2))
-    console.log('==============================')
-
-    dc.send(JSON.stringify(updateEvent))
-
-    // Now trigger a response from the AI
-    const responseCreateEvent = {
-      type: 'response.create'
-    }
-
-    console.log('=== TRIGGERING AI RESPONSE ===')
-    console.log('Event:', JSON.stringify(responseCreateEvent, null, 2))
-    console.log('==============================')
-
-    dc.send(JSON.stringify(responseCreateEvent))
   }
 
   // Handle server events from OpenAI
@@ -177,23 +132,61 @@ function App() {
 
     switch (event.type) {
       case 'response.function_call_arguments.done':
+        console.log('=== FUNCTION CALL ARGUMENTS DONE ===')
+        console.log('Full event:', JSON.stringify(event, null, 2))
+        console.log('====================================')
         handleFunctionCall(event)
         break
 
-      case 'response.audio_transcript.done':
-        if (event.transcript) {
-          addToLog(`AI: ${event.transcript}`)
+      case 'response.output_audio_transcript.done':
+        // AI speech transcript - correct event type for output audio
+        if (event.transcript && event.item_id) {
+          // Prevent duplicate transcripts using item_id tracking
+          if (processedItemIds.current.has(event.item_id)) {
+            console.log('Skipping duplicate AI transcript for item:', event.item_id)
+            break
+          }
+
+          processedItemIds.current.add(event.item_id)
+          console.log('AI transcript (done):', event.transcript)
+          addToTranscript('ai', event.transcript)
         }
         break
 
+      case 'response.output_audio_transcript.delta':
+        // AI speech transcript delta - streaming updates (logged but not added to transcript yet)
+        console.log('AI transcript delta:', event.delta)
+        break
+
       case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript) {
-          addToLog(`Student: ${event.transcript}`)
+        // Student speech transcript - asynchronous, arrives without guaranteed timing
+        if (event.transcript && event.item_id) {
+          // Prevent duplicate transcripts using item_id tracking
+          if (processedItemIds.current.has(event.item_id)) {
+            console.log('Skipping duplicate student transcript for item:', event.item_id)
+            break
+          }
+
+          processedItemIds.current.add(event.item_id)
+          console.log('Student transcript:', event.transcript)
+          addToTranscript('student', event.transcript)
         }
+        break
+
+      case 'conversation.item.input_audio_transcription.delta':
+        // Student speech transcript delta - streaming updates (logged but not added yet)
+        console.log('Student transcript delta:', event.delta)
         break
 
       case 'error':
         console.error('OpenAI error:', event.error)
+        break
+
+      default:
+        // Log any transcript-related events we might be missing
+        if (event.type.includes('transcript') || event.type.includes('audio')) {
+          console.log('Unhandled audio/transcript event:', event.type, event)
+        }
         break
     }
   }
@@ -203,12 +196,18 @@ function App() {
     const functionName = event.name
     const args = JSON.parse(event.arguments)
 
-    console.log(`Function called: ${functionName}`, args)
+    console.log('=== FUNCTION CALL RECEIVED ===')
+    console.log('Function name:', functionName)
+    console.log('Arguments:', args)
+    console.log('Event:', event)
+    console.log('==============================')
 
     if (functionName === 'stage_complete') {
       await handleStageComplete(args.reasoning)
     } else if (functionName === 'update_whiteboard') {
       await handleWhiteboardUpdate(args)
+    } else {
+      console.warn('Unknown function called:', functionName)
     }
   }
 
@@ -217,7 +216,54 @@ function App() {
     if (!sessionState) return
 
     console.log('Stage complete:', reasoning)
-    addToLog(`[Stage ${currentStage?.stage_id} completed: ${reasoning}]`)
+
+    // Close WebRTC connections properly
+    if (sessionState.data_channel) {
+      console.log('Closing data channel for stage', sessionState.current_stage)
+      // Remove event listeners that we added
+      const dc = sessionState.data_channel
+      if (messageHandlerRef.current) {
+        dc.removeEventListener('message', messageHandlerRef.current)
+        messageHandlerRef.current = null
+      }
+      if (openHandlerRef.current) {
+        dc.removeEventListener('open', openHandlerRef.current)
+        openHandlerRef.current = null
+      }
+      // Clear other event handlers
+      dc.onopen = null
+      dc.onclose = null
+      dc.onerror = null
+      dc.onmessage = null
+      dc.close()
+    }
+    if (sessionState.peer_connection) {
+      console.log('Closing peer connection for stage', sessionState.current_stage)
+      const pc = sessionState.peer_connection
+      // Stop all tracks
+      pc.getSenders().forEach(sender => {
+        if (sender.track) {
+          sender.track.stop()
+        }
+      })
+      pc.getReceivers().forEach(receiver => {
+        if (receiver.track) {
+          receiver.track.stop()
+        }
+      })
+      // Remove all event listeners
+      pc.ontrack = null
+      pc.onicecandidate = null
+      pc.oniceconnectionstatechange = null
+      pc.onconnectionstatechange = null
+      pc.close()
+    }
+
+    // Update state to show we're no longer in voice session
+    setIsVoiceActive(false)
+
+    // Show "Correct!" alert
+    alert('Correct!')
 
     const lesson = getLesson(sessionState.lesson_id)
     if (!lesson) return
@@ -225,38 +271,45 @@ function App() {
     const nextStageIndex = sessionState.current_stage + 1
 
     if (nextStageIndex < lesson.stages.length) {
-      // Advance to next stage
+      // Advance to next stage (but don't start voice yet)
       const nextStage = lesson.stages[nextStageIndex]
 
       setCurrentStage(nextStage)
       setSessionState({
         ...sessionState,
         current_stage: nextStageIndex,
-        stage_start_time: new Date()
+        stage_start_time: new Date(),
+        peer_connection: null,
+        data_channel: null
       })
 
-      // Show transition UI
-      alert(`Great work! Moving to Stage ${nextStage.stage_id}`)
-
-      // Update session instructions for new stage
-      if (sessionState.data_channel) {
-        sendSessionUpdate(sessionState.data_channel, nextStage)
-      }
+      // Don't send session update - wait for user to click "Start Next Stage"
     } else {
       // Lesson complete
       alert('Congratulations! You completed the entire lesson!')
       console.log('Lesson completed')
+      setCurrentStage(null)
     }
   }
 
   // Handle whiteboard drawing request from AI
-  const handleWhiteboardUpdate = async (args: { action: string; description: string }) => {
-    console.log('Whiteboard update requested:', args)
+  const handleWhiteboardUpdate = async (args: { description: string }) => {
+    console.log('=== WHITEBOARD UPDATE REQUESTED ===')
+    console.log('Description:', args.description)
+    console.log('Has whiteboard image:', !!whiteboardImageRef.current)
+    console.log('===================================')
 
     if (!whiteboardImageRef.current) {
-      console.warn('No whiteboard image available yet')
+      console.warn('No whiteboard image available yet - cannot draw')
       return
     }
+
+    // Extract canvas dimensions from the data URL by creating a temporary image
+    const img = new Image()
+    await new Promise<void>((resolve) => {
+      img.onload = () => resolve()
+      img.src = whiteboardImageRef.current
+    })
 
     try {
       // Call backend to generate drawing commands
@@ -267,8 +320,9 @@ function App() {
         },
         body: JSON.stringify({
           imageDataUrl: whiteboardImageRef.current,
-          action: args.action,
-          description: args.description
+          description: args.description,
+          canvasWidth: img.width,
+          canvasHeight: img.height
         })
       })
 
@@ -277,6 +331,8 @@ function App() {
       }
 
       const result = await response.json()
+
+      console.log('Drawing commands generated:', result)
 
       // Trigger drawing on whiteboard component
       window.dispatchEvent(new CustomEvent('whiteboard-draw', {
@@ -319,7 +375,7 @@ function App() {
         <h1>🍕 AI Math Tutor</h1>
         {currentStage && (
           <div style={{ fontSize: '14px', marginTop: '8px' }}>
-            Stage {currentStage.stage_id}: {currentStage.learning_objective}
+            Stage {currentStage.stage_id}
           </div>
         )}
       </header>
@@ -348,50 +404,93 @@ function App() {
             </button>
           </div>
         ) : (
-          <>
-            <StageDisplay stage={currentStage} />
+          <div style={{
+            display: 'flex',
+            gap: '20px',
+            height: 'calc(100vh - 80px)',
+            padding: '20px 80px'
+          }}>
+            {/* Left column: Problem image and text (25%) */}
+            <div style={{
+              flex: '0 0 25%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+              overflow: 'auto'
+            }}>
+              <StageDisplay stage={currentStage} />
+            </div>
 
-            {!isVoiceActive ? (
-              <VoiceInterface onSessionCreate={handleSessionCreate} />
-            ) : (
-              <>
-                <div style={{
-                  margin: '20px 0',
-                  textAlign: 'center',
-                  padding: '12px',
-                  backgroundColor: '#d4edda',
-                  borderRadius: '8px'
-                }}>
-                  <span style={{ color: '#155724', fontWeight: 'bold' }}>
-                    ✓ Voice Session Active - Start talking!
-                  </span>
-                </div>
+            {/* Middle column: Whiteboard (50%) */}
+            <div style={{
+              flex: '0 0 50%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+              overflow: 'auto'
+            }}>
+              {isVoiceActive ? (
+                <>
+                  <div style={{
+                    padding: '12px',
+                    backgroundColor: '#d4edda',
+                    borderRadius: '8px',
+                    textAlign: 'center'
+                  }}>
+                    <span style={{ color: '#155724', fontWeight: 'bold' }}>
+                      ✓ Voice Session Active - Start talking!
+                    </span>
+                  </div>
 
-                <Whiteboard onUpdate={handleWhiteboardImageUpdate} />
-
-                {/* Conversation Log */}
-                <div style={{
-                  marginTop: '20px',
-                  padding: '20px',
-                  backgroundColor: '#f8f9fa',
-                  borderRadius: '8px',
-                  maxHeight: '200px',
-                  overflowY: 'auto'
-                }}>
-                  <h3 style={{ marginTop: 0 }}>Conversation:</h3>
-                  {conversationLog.length === 0 ? (
-                    <p style={{ color: '#6c757d' }}>Conversation will appear here...</p>
-                  ) : (
-                    conversationLog.map((msg, i) => (
-                      <div key={i} style={{ marginBottom: '8px', fontSize: '14px' }}>
-                        {msg}
-                      </div>
-                    ))
+                  <Whiteboard
+                    key={`whiteboard-stage-${sessionState.current_stage}`}
+                    onUpdate={handleWhiteboardImageUpdate}
+                  />
+                </>
+              ) : (
+                <>
+                  {sessionState.current_stage > 0 && (
+                    <div style={{
+                      padding: '20px',
+                      backgroundColor: '#fff3cd',
+                      borderRadius: '12px',
+                      border: '2px solid #ffc107',
+                      textAlign: 'center',
+                      marginBottom: '20px'
+                    }}>
+                      <p style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '18px',
+                        fontWeight: 'bold',
+                        color: '#856404'
+                      }}>
+                        🎉 Great job! Ready for the next stage?
+                      </p>
+                      <p style={{
+                        margin: '0',
+                        fontSize: '14px',
+                        color: '#856404'
+                      }}>
+                        Click below to start a new voice session for Stage {currentStage?.stage_id}
+                      </p>
+                    </div>
                   )}
-                </div>
-              </>
-            )}
-          </>
+                  <VoiceInterface
+                    stage={currentStage}
+                    onSessionCreate={handleSessionCreate}
+                    isNextStage={sessionState.current_stage > 0}
+                  />
+                </>
+              )}
+            </div>
+
+            {/* Right column: Transcript (25%) */}
+            <div style={{
+              flex: '0 0 25%'
+            }}>
+              <Transcript entries={transcript} />
+            </div>
+          </div>
         )}
       </main>
     </div>
